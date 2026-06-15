@@ -1,0 +1,34 @@
+{
+  "_comment": "claude-telegram-gateway 설정 예시. 복사해서 config.json 으로 쓰세요(config.json 은 gitignore).",
+
+  "tmuxSession": "telegram",
+  "claudeBin": "claude",
+  "claudeArgs": "--dangerously-skip-permissions",
+
+  "bots": {
+    "captain": {
+      "tokenEnv": "BOT_CAPTAIN_TOKEN",
+      "persona": "captain",
+      "_comment": "봇 = 인격. persona 는 personas/<name>/ 폴더를 가리킨다."
+    },
+    "hulk": {
+      "tokenEnv": "BOT_HULK_TOKEN",
+      "persona": "hulk"
+    }
+  },
+
+  "users": {
+    "111111111": {
+      "name": "alice",
+      "workspace": "workspaces/alice",
+      "_comment": "user_id(텔레그램) → 이름 + 데이터 워크스페이스. 같은 사용자는 봇이 달라도 이 워크스페이스(기억)를 공유한다."
+    }
+  },
+
+  "_routing": "세션 = (bot × user) 조합. 세션 이름은 자동으로 <user>_<bot> (예: alice_hulk). 디스패처가 (bot, user_id) 로 해당 세션에 라우팅한다.",
+
+  "_shared_md": "사용자 워크스페이스에서 봇 가로질러 공유되는 파일(인격 제외). personas 폴더의 IDENTITY/SOUL 만 봇별, 나머지는 사용자 단위 공유.",
+  "sharedWorkspaceFiles": ["USER.md", "MEMORY.md", "CLAUDE.md", "AGENTS.md", "COMMANDS.md", "TOOLS.md"],
+  "sharedWorkspaceDirs": ["memory"],
+  "excludeDirs": ["obsidian"]
+}
