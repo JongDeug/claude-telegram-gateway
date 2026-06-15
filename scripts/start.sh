@@ -64,7 +64,7 @@ EOF
   "enableAllProjectMcpServers": true,
   "hooks": {
     "UserPromptSubmit": [ { "matcher": "", "hooks": [ { "type": "command", "command": "bash $ROOT/src/hooks/prompt-hook.sh" } ] } ],
-    "PreToolUse": [ { "matcher": "mcp__plugin_telegram_telegram__reply", "hooks": [ { "type": "command", "command": "bash $ROOT/src/hooks/reply-format-hook.sh" } ] } ],
+    "PreToolUse": [ { "matcher": "mcp__plugin_telegram_telegram__reply", "hooks": [ { "type": "command", "command": "bash $ROOT/src/hooks/reply-format-hook.sh" } ] }, { "matcher": "AskUserQuestion", "hooks": [ { "type": "command", "command": "bash $ROOT/src/hooks/block-askuserquestion.sh" } ] } ],
     "Stop": [ { "matcher": "", "hooks": [ { "type": "command", "command": "bash $ROOT/src/hooks/stop-enforce-reply.sh" } ] } ]
   }
 }
