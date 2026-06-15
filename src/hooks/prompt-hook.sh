@@ -71,5 +71,10 @@ if user:
 else:
     parts.append(f"[경고] 알 수 없는 user_id: {user_id}. 접근을 거부하고 관리자 확인을 요청한다.")
 
-print(json.dumps({"systemMessage": "\n\n".join(parts)}))
+print(json.dumps({
+    "hookSpecificOutput": {
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": "\n\n".join(parts),
+    }
+}))
 PYEOF
