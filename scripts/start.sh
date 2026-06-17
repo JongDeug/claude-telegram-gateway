@@ -85,6 +85,9 @@ for uname in $USER_NAMES; do
     echo "  $uname / $bkey pane"
   done
   tmux select-layout -t "$TMUX_SESSION:$uname" even-horizontal
+  # pane 경계 상단에 봇 이름표 — attach 시 어느 pane 이 누군지 한눈에 (@bot 값 표시)
+  tmux set-option -w -t "$TMUX_SESSION:$uname" pane-border-status top
+  tmux set-option -w -t "$TMUX_SESSION:$uname" pane-border-format " #[fg=green,bold]#{@bot}#[default] "
 done
 
 echo "[gateway] claude 부팅 대기 (10s)"
