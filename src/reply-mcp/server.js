@@ -16,6 +16,7 @@
 import { readFileSync, appendFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { md2tg } from "./md2tg.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", ".."); // src/reply-mcp → repo root
@@ -90,13 +91,26 @@ const isImage = (p) => /\.(png|jpe?g|gif|webp)$/i.test(p);
 
 // ---- 툴 구현 ----
 
+// 포맷 적용 — 기본은 마크다운 → 텔레그램 HTML 자동 변환(OpenClaw 식).
+//   (미지정)/"markdown"/"text" → md2tg + parse_mode HTML : claude 가 낸 마크다운을 예쁘게
+//   "raw"        → 변환·parse_mode 없이 원문 그대로
+//   "html"       → 변환 없이 HTML (이미 텔레그램 HTML 인 경우)
+//   "markdownv2" → 변환 없이 MarkdownV2 (하위호환)
+function applyFormat(base, text, format) {
+  if (format === "raw") return text;
+  if (format === "markdownv2") { base.parse_mode = "MarkdownV2"; return text; }
+  if (format === "html") { base.parse_mode = "HTML"; return text; }
+  base.parse_mode = "HTML";
+  return md2tg(text);
+}
+
 async function doReply(args) {
   const { chat_id, text, reply_to, format, files } = args;
   if (!chat_id) throw new Error("chat_id required");
   const base = { chat_id };
   // allow_sending_without_reply: 원본 메시지를 못 찾아도(삭제/포럼 등) 일반 전송으로 보낸다.
   if (reply_to) base.reply_parameters = { message_id: Number(reply_to), allow_sending_without_reply: true };
-  if (format === "markdownv2") base.parse_mode = "MarkdownV2";
+  const outText = text ? applyFormat(base, text, format) : text;
 
   const sentIds = [];
   // 첨부가 있으면 첨부부터 (첫 첨부에 caption 으로 text)
@@ -105,8 +119,8 @@ async function doReply(args) {
       const fp = files[i];
       const fields = { chat_id };
       if (base.reply_parameters) fields.reply_parameters = JSON.stringify(base.reply_parameters);
-      if (i === 0 && text) {
-        fields.caption = text;
+      if (i === 0 && outText) {
+        fields.caption = outText;
         if (base.parse_mode) fields.parse_mode = base.parse_mode;
       }
       const method = isImage(fp) ? "sendPhoto" : "sendDocument";
@@ -117,16 +131,26 @@ async function doReply(args) {
     return `sent (id: ${sentIds.join(", ")})`;
   }
 
-  if (!text) throw new Error("text or files required");
-  const r = await tg("sendMessage", { ...base, text });
-  return `sent (id: ${r.message_id})`;
+  if (!outText) throw new Error("text or files required");
+  // 변환된 HTML 이 텔레그램에서 거부되면(드묾) parse_mode 빼고 원문 plain 으로 폴백 — 전송 자체는 보장.
+  try {
+    const r = await tg("sendMessage", { ...base, text: outText });
+    return `sent (id: ${r.message_id})`;
+  } catch (e) {
+    if (base.parse_mode) {
+      const b2 = { ...base }; delete b2.parse_mode;
+      const r = await tg("sendMessage", { ...b2, text });
+      return `sent (id: ${r.message_id}) [plain fallback]`;
+    }
+    throw e;
+  }
 }
 
 async function doEdit(args) {
   const { chat_id, message_id, text, format } = args;
   if (!chat_id || !message_id || !text) throw new Error("chat_id, message_id, text required");
-  const payload = { chat_id, message_id: Number(message_id), text };
-  if (format === "markdownv2") payload.parse_mode = "MarkdownV2";
+  const payload = { chat_id, message_id: Number(message_id) };
+  payload.text = applyFormat(payload, text, format);
   await tg("editMessageText", payload);
   return `edited (id: ${message_id})`;
 }
@@ -160,14 +184,15 @@ const TOOLS = [
     name: "reply",
     description:
       "Reply on Telegram via sendMessage. Pass chat_id from the inbound <channel> tag. " +
-      "reply_to (message_id) threads under a message. files (absolute paths) attach images/docs.",
+      "reply_to (message_id) threads under a message. files (absolute paths) attach images/docs. " +
+      "Just write Markdown — it is auto-converted to Telegram HTML (bold, italic, lists, code blocks, tables, blockquotes, links). No need to set format or escape anything.",
     inputSchema: {
       type: "object",
       properties: {
         chat_id: { type: "string" },
         text: { type: "string" },
         reply_to: { type: "string", description: "message_id to thread under" },
-        format: { type: "string", enum: ["text", "markdownv2"], description: "default text" },
+        format: { type: "string", enum: ["markdown", "html", "markdownv2", "raw"], description: "default markdown → auto-converted to Telegram HTML. Omit unless you need an opt-out: html (pre-rendered Telegram HTML), markdownv2 (legacy, manual escape), raw (no parse_mode)." },
         files: { type: "array", items: { type: "string" }, description: "absolute file paths" },
       },
       required: ["chat_id"],
@@ -183,7 +208,7 @@ const TOOLS = [
         chat_id: { type: "string" },
         message_id: { type: "string" },
         text: { type: "string" },
-        format: { type: "string", enum: ["text", "markdownv2"] },
+        format: { type: "string", enum: ["markdown", "html", "markdownv2", "raw"], description: "default markdown → Telegram HTML" },
       },
       required: ["chat_id", "message_id", "text"],
     },
