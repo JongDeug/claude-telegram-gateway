@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-telegram-gateway 정지: 디스패처 + 모든 (user × bot) 세션 윈도우를 닫는다.
+# claude-telegram-gateway 정지: 디스패처 + 사용자 윈도우(3-pane) + 구 (user × bot) 세션 윈도우를 닫는다.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
@@ -13,6 +13,11 @@ kill_win() {
 }
 
 kill_win "gw-dispatch"
+# 사용자 윈도우(3-pane 구조: 윈도우 이름 = <user.name>)
+for uname in $(python3 -c "import json;print(' '.join(v['name'] for k,v in json.load(open('$CONFIG'))['users'].items() if not k.startswith('_')))"); do
+  kill_win "$uname"
+done
+# 구 봇 윈도우(<user>_<bot>) — 옛 구조 잔재까지 정리
 while IFS=$'\t' read -r uname bkey; do
   [ -n "$uname" ] || continue
   kill_win "${uname}_${bkey}"

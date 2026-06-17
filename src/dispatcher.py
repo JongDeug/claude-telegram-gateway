@@ -99,12 +99,30 @@ def build_channel_tag(msg, bot_key):
 
 
 def inject(target, payload):
-    # tmux set-buffer 는 전역 버퍼라 주입을 직렬화한다.
+    # tmux set-buffer 는 전역 버퍼라 주입을 직렬화한다. target 은 pane id(%N).
     with _inject_lock:
         subprocess.run(["tmux", "set-buffer", "--", payload], check=True)
         subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-t", target], check=True)
         time.sleep(0.4)
         subprocess.run(["tmux", "send-keys", "-t", target, "Enter"], check=True)
+
+
+def find_pane(tmux_session, uname, bkey):
+    """사용자 윈도우(uname) 안에서 @bot == bkey 인 pane id 를 찾는다(start.sh 가 set-option -p @bot 으로 새김)."""
+    try:
+        out = subprocess.run(
+            ["tmux", "list-panes", "-t", f"{tmux_session}:{uname}",
+             "-F", "#{@bot}\t#{pane_id}"],
+            capture_output=True, text=True, check=True).stdout
+    except subprocess.CalledProcessError:
+        return None
+    for line in out.splitlines():
+        if "\t" not in line:
+            continue
+        bot, pid = line.split("\t", 1)
+        if bot == bkey:
+            return pid
+    return None
 
 
 def offset_path(bot_key):
@@ -152,11 +170,13 @@ def poll_bot(bot_key, token, users, tmux_session):
             if not user:
                 log(f"[{bot_key}] UNROUTED user_id={user_id} text={preview!r}")
                 continue
-            session_name = f"{user['name']}_{bot_key}"
-            target = f"{tmux_session}:{session_name}"
+            target = find_pane(tmux_session, user["name"], bot_key)
+            if not target:
+                log(f"[{bot_key}] PANE NOT FOUND — user={user['name']} (윈도우/@bot 확인). 메시지 보류.")
+                continue
             try:
                 inject(target, build_channel_tag(msg, bot_key))
-                log(f"[{bot_key}] -> {session_name} msg_id={msg['message_id']} text={preview!r}")
+                log(f"[{bot_key}] -> {user['name']}/{bot_key} ({target}) msg_id={msg['message_id']} text={preview!r}")
             except subprocess.CalledProcessError as e:
                 log(f"[{bot_key}] INJECT FAIL target={target}: {e}")
 

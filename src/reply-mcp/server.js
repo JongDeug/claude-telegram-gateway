@@ -44,8 +44,19 @@ function loadToken() {
 }
 
 const TOKEN = loadToken();
-const API = (method) => `https://api.telegram.org/bot${TOKEN}/${method}`;
-const FILE_API = (path) => `https://api.telegram.org/file/bot${TOKEN}/${path}`;
+// 봇별 토큰: 인자 bot(=inbound <channel> 태그의 bot 속성)이 오면 BOT_<bot>_TOKEN 으로,
+// 없으면 세션 기본 TOKEN(BOT_KEY) 으로 보낸다. → Agent View 한 세션이 @hulk/@captain/@thor
+// 어느 봇으로든 답할 수 있다. bot 없는 기존 (봇×사용자) 세션은 그대로 동작(하위호환).
+function tokenFor(botKey) {
+  if (botKey) {
+    const k = `BOT_${String(botKey).toUpperCase()}_TOKEN`;
+    const t = process.env[k] || readEnvVar(k);
+    if (t) return t;
+  }
+  return TOKEN;
+}
+const API = (method, botKey) => `https://api.telegram.org/bot${tokenFor(botKey)}/${method}`;
+const FILE_API = (path, botKey) => `https://api.telegram.org/file/bot${tokenFor(botKey)}/${path}`;
 const DL_DIR = join(ROOT, "inbox");
 
 const DEBUG = !!process.env.GATEWAY_MCP_DEBUG;
@@ -61,8 +72,8 @@ function dbg(dir, obj) {
   } catch {}
 }
 
-async function tg(method, payload) {
-  const res = await fetch(API(method), {
+async function tg(method, payload, botKey) {
+  const res = await fetch(API(method, botKey), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -73,7 +84,7 @@ async function tg(method, payload) {
 }
 
 // multipart 전송 (사진/문서 첨부)
-async function tgUpload(method, fields, fileField, filePath) {
+async function tgUpload(method, fields, fileField, filePath, botKey) {
   const form = new FormData();
   for (const [k, v] of Object.entries(fields)) {
     if (v !== undefined && v !== null) form.append(k, String(v));
@@ -81,7 +92,7 @@ async function tgUpload(method, fields, fileField, filePath) {
   const buf = readFileSync(filePath);
   const name = filePath.split("/").pop();
   form.append(fileField, new Blob([buf]), name);
-  const res = await fetch(API(method), { method: "POST", body: form });
+  const res = await fetch(API(method, botKey), { method: "POST", body: form });
   const json = await res.json();
   if (!json.ok) throw new Error(`${method} failed: ${json.description || res.status}`);
   return json.result;
@@ -105,7 +116,7 @@ function applyFormat(base, text, format) {
 }
 
 async function doReply(args) {
-  const { chat_id, text, reply_to, format, files } = args;
+  const { chat_id, text, reply_to, format, files, bot } = args;
   if (!chat_id) throw new Error("chat_id required");
   const base = { chat_id };
   // allow_sending_without_reply: 원본 메시지를 못 찾아도(삭제/포럼 등) 일반 전송으로 보낸다.
@@ -125,7 +136,7 @@ async function doReply(args) {
       }
       const method = isImage(fp) ? "sendPhoto" : "sendDocument";
       const field = isImage(fp) ? "photo" : "document";
-      const r = await tgUpload(method, fields, field, fp);
+      const r = await tgUpload(method, fields, field, fp, bot);
       sentIds.push(r.message_id);
     }
     return `sent (id: ${sentIds.join(", ")})`;
@@ -134,12 +145,12 @@ async function doReply(args) {
   if (!outText) throw new Error("text or files required");
   // 변환된 HTML 이 텔레그램에서 거부되면(드묾) parse_mode 빼고 원문 plain 으로 폴백 — 전송 자체는 보장.
   try {
-    const r = await tg("sendMessage", { ...base, text: outText });
+    const r = await tg("sendMessage", { ...base, text: outText }, bot);
     return `sent (id: ${r.message_id})`;
   } catch (e) {
     if (base.parse_mode) {
       const b2 = { ...base }; delete b2.parse_mode;
-      const r = await tg("sendMessage", { ...b2, text });
+      const r = await tg("sendMessage", { ...b2, text }, bot);
       return `sent (id: ${r.message_id}) [plain fallback]`;
     }
     throw e;
@@ -147,30 +158,30 @@ async function doReply(args) {
 }
 
 async function doEdit(args) {
-  const { chat_id, message_id, text, format } = args;
+  const { chat_id, message_id, text, format, bot } = args;
   if (!chat_id || !message_id || !text) throw new Error("chat_id, message_id, text required");
   const payload = { chat_id, message_id: Number(message_id) };
   payload.text = applyFormat(payload, text, format);
-  await tg("editMessageText", payload);
+  await tg("editMessageText", payload, bot);
   return `edited (id: ${message_id})`;
 }
 
 async function doReact(args) {
-  const { chat_id, message_id, emoji } = args;
+  const { chat_id, message_id, emoji, bot } = args;
   if (!chat_id || !message_id || !emoji) throw new Error("chat_id, message_id, emoji required");
   await tg("setMessageReaction", {
     chat_id,
     message_id: Number(message_id),
     reaction: [{ type: "emoji", emoji }],
-  });
+  }, bot);
   return `reacted ${emoji} (id: ${message_id})`;
 }
 
 async function doDownload(args) {
-  const { file_id } = args;
+  const { file_id, bot } = args;
   if (!file_id) throw new Error("file_id required");
-  const f = await tg("getFile", { file_id });
-  const res = await fetch(FILE_API(f.file_path));
+  const f = await tg("getFile", { file_id }, bot);
+  const res = await fetch(FILE_API(f.file_path, bot));
   const buf = Buffer.from(await res.arrayBuffer());
   const { mkdirSync, writeFileSync } = await import("node:fs");
   mkdirSync(DL_DIR, { recursive: true });
@@ -183,7 +194,7 @@ const TOOLS = [
   {
     name: "reply",
     description:
-      "Reply on Telegram via sendMessage. Pass chat_id from the inbound <channel> tag. " +
+      "Reply on Telegram via sendMessage. Pass chat_id AND bot from the inbound <channel> tag — bot routes the reply to the correct bot (e.g. hulk/captain/thor). " +
       "reply_to (message_id) threads under a message. files (absolute paths) attach images/docs. " +
       "Just write Markdown — it is auto-converted to Telegram HTML (bold, italic, lists, code blocks, tables, blockquotes, links). No need to set format or escape anything.",
     inputSchema: {
@@ -194,6 +205,7 @@ const TOOLS = [
         reply_to: { type: "string", description: "message_id to thread under" },
         format: { type: "string", enum: ["markdown", "html", "markdownv2", "raw"], description: "default markdown → auto-converted to Telegram HTML. Omit unless you need an opt-out: html (pre-rendered Telegram HTML), markdownv2 (legacy, manual escape), raw (no parse_mode)." },
         files: { type: "array", items: { type: "string" }, description: "absolute file paths" },
+        bot: { type: "string", description: "봇 키 — inbound <channel> 태그의 bot 속성(hulk/captain/thor 등). 한 세션(Agent View)이 여러 봇을 다룰 때 이 봇으로 보낸다. 생략 시 세션 기본 봇." },
       },
       required: ["chat_id"],
     },
@@ -209,6 +221,7 @@ const TOOLS = [
         message_id: { type: "string" },
         text: { type: "string" },
         format: { type: "string", enum: ["markdown", "html", "markdownv2", "raw"], description: "default markdown → Telegram HTML" },
+        bot: { type: "string", description: "봇 키(채널 태그 bot 속성). 생략 시 세션 기본 봇." },
       },
       required: ["chat_id", "message_id", "text"],
     },
@@ -223,6 +236,7 @@ const TOOLS = [
         chat_id: { type: "string" },
         message_id: { type: "string" },
         emoji: { type: "string" },
+        bot: { type: "string", description: "봇 키(채널 태그 bot 속성). 생략 시 세션 기본 봇." },
       },
       required: ["chat_id", "message_id", "emoji"],
     },
@@ -233,7 +247,7 @@ const TOOLS = [
     description: "Download a Telegram file by file_id; returns the local absolute path.",
     inputSchema: {
       type: "object",
-      properties: { file_id: { type: "string" } },
+      properties: { file_id: { type: "string" }, bot: { type: "string", description: "봇 키(채널 태그 bot 속성). 생략 시 세션 기본 봇." } },
       required: ["file_id"],
     },
     handler: doDownload,
