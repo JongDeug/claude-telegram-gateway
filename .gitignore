@@ -20,3 +20,4 @@ node_modules/
 # real personas (per-user setup; keep only example public)
 personas/*
 !personas/example/
+__pycache__/
